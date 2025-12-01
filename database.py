@@ -1,11 +1,14 @@
 import chromadb
 import json
+from typing import Optional, List, Dict
 
 class Database:
     def __init__(self, path):
         self.client = chromadb.PersistentClient(path=path)
         self.conversation_db = self.client.get_or_create_collection("student_conversation")
         self.progress_db = self.client.get_or_create_collection("student_progress")
+        # Add metadata collection for better organization
+        self.metadata_db = self.client.get_or_create_collection("metadata")
 
     def get_progress(self, student_id):
         """Retrieve stored progress data for a student."""
@@ -58,16 +61,42 @@ class Database:
     def retrieve_relevant_interactions(self, query_text, student_id, num_results=3):
         """Retrieve relevant past interactions specific to the student."""
         try:
-            result = self.conversation_db.query(query_texts=[query_text], n_results=num_results)
-
-            # return only related to student 
-            interactions = []
-            for docs, ids in zip(result.get("documents", [[]]), result.get("ids", [[]])):
-                for doc, doc_id in zip(docs, ids):
-                    if doc and doc_id == student_id:
-                        interactions.append(json.loads(doc))
-
-            return interactions
+            # Get all conversations for this student first
+            all_data = self.conversation_db.get(ids=[student_id])
+            if not all_data or not all_data.get("documents"):
+                return []
+            
+            # Parse conversations
+            conversations = json.loads(all_data["documents"][0]) if all_data["documents"] else []
+            
+            # Simple keyword-based relevance (can be enhanced with embeddings)
+            query_lower = query_text.lower()
+            relevant = []
+            
+            for conv in conversations:
+                question = conv.get("question", "").lower()
+                response = conv.get("response", "").lower()
+                # Check if query keywords appear in question or response
+                if any(word in question or word in response for word in query_lower.split() if len(word) > 3):
+                    relevant.append(conv)
+            
+            # Return most recent relevant interactions
+            return relevant[-num_results:] if len(relevant) > num_results else relevant
+            
         except Exception as e:
             print(f"Error retrieving past interactions for {student_id}: {e}")
             return []
+    
+    def upsert(self, collection_name: str, documents: List[str], ids: List[str], metadatas: Optional[List[Dict]] = None):
+        """Generic upsert method for any collection."""
+        try:
+            collection = getattr(self, collection_name, None)
+            if not collection:
+                collection = self.client.get_or_create_collection(collection_name)
+            
+            if metadatas:
+                collection.upsert(documents=documents, ids=ids, metadatas=metadatas)
+            else:
+                collection.upsert(documents=documents, ids=ids)
+        except Exception as e:
+            print(f"Error in upsert operation: {e}")

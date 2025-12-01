@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from config import MODEL
 from database import Database
+from utils import clean_text, extract_json
 import re
 
 db = Database("./tutor_memory")
@@ -74,11 +75,15 @@ class StudentProgressTracker:
             if not response or not response.candidates:
                 raise ValueError("No response from model.")
 
-            # Extract the text content and remove the code block markers
-            content = response.candidates[0].content.parts[0].text.strip() if response.candidates[0].content.parts else ""
+            # Extract the text content
+            if isinstance(response, str):
+                content = response
+            else:
+                content = response.candidates[0].content.parts[0].text.strip() if response.candidates[0].content.parts else ""
             
             # Clean the content 
-            cleaned_content = re.sub(r'```json\n|\n```', '', content).strip()
+            cleaned_content = clean_text(content)
+            cleaned_content = re.sub(r'```json\n?|\n?```', '', cleaned_content).strip()
 
             if not cleaned_content:
                 raise ValueError("Empty AI response")
@@ -86,7 +91,9 @@ class StudentProgressTracker:
             # Debugging: Print cleaned content before parsing JSON
             print("Cleaned content:", cleaned_content)
 
-            classification = json.loads(cleaned_content)
+            classification = extract_json(cleaned_content)
+            if not classification:
+                classification = json.loads(cleaned_content) if cleaned_content else {}
 
             topic = classification.get("topic", "").strip()
             subtopic = classification.get("subtopic", "").strip()
@@ -125,7 +132,18 @@ class StudentProgressTracker:
         response = MODEL.generate_content(prompt)
 
         try:
-            difficulty = response.candidates[0].content.parts[0].text.strip()
+            if isinstance(response, str):
+                difficulty = response.strip()
+            else:
+                difficulty = response.candidates[0].content.parts[0].text.strip()
+            
+            # Clean and validate
+            difficulty = clean_text(difficulty)
+            # Extract just the difficulty level if there's extra text
+            for level in ["Basic", "Intermediate", "Advanced"]:
+                if level.lower() in difficulty.lower():
+                    return level
+            
             return difficulty if difficulty in {"Basic", "Intermediate", "Advanced"} else "Basic" 
 
         except (AttributeError, IndexError) as e:
@@ -148,6 +166,17 @@ class StudentProgressTracker:
             self.progress["topics_covered"][topic].append(subtopic)
 
         self.progress["difficulty_distribution"][difficulty] += 1 
+        
+        # Add timestamp to track learning streak
+        if "activity_dates" not in self.progress:
+            self.progress["activity_dates"] = []
+        
+        today = datetime.now().date().isoformat()
+        if today not in self.progress["activity_dates"]:
+            self.progress["activity_dates"].append(today)
+            # Keep only last 100 dates
+            if len(self.progress["activity_dates"]) > 100:
+                self.progress["activity_dates"] = self.progress["activity_dates"][-100:]
 
         db.update_progress(self.student_id, self.progress)  
         
@@ -155,11 +184,21 @@ class StudentProgressTracker:
 
     def generate_recommendations(self):
         """Generate topic recommendations based on student progress."""
-        prompt = f"Suggest 3 topics based on:\n{json.dumps(self.progress)}"
-        response = MODEL.generate_content(prompt)
+        system_prompt = "You are an expert educational advisor. Provide personalized learning recommendations."
+        
+        prompt = f"""Based on this student's progress, suggest 3-5 specific topics or areas they should explore next.
 
+Student Progress:
+{json.dumps(self.progress, indent=2)}
+
+Provide recommendations as a clear, numbered list with brief explanations for each."""
+        
         try:
-            return response.candidates[0].content.parts[0].text.strip() if response.candidates else "No recommendations available."
-        except (AttributeError, IndexError):
-            print(f"Error generating recommendations for student {self.student_id}")
+            response = MODEL.generate_content(prompt, system_prompt=system_prompt)
+            if isinstance(response, str):
+                return response
+            else:
+                return response.candidates[0].content.parts[0].text.strip() if response.candidates else "No recommendations available."
+        except Exception as e:
+            print(f"Error generating recommendations for student {self.student_id}: {e}")
             return "No recommendations available."
