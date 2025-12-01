@@ -13,6 +13,7 @@ from flashcards import FlashcardSystem
 from study_plans import StudyPlanGenerator
 from analytics import AnalyticsDashboard
 from multimodal import MultimodalProcessor
+from export import DataExporter
 
 # Page configuration
 st.set_page_config(
@@ -161,7 +162,18 @@ def chat_page():
     # Chat input
     prompt = st.chat_input("Ask me anything or type 'help' for commands...")
     
-    if prompt or uploaded_image or uploaded_doc:
+    # Process uploads even without prompt (for questions about uploaded content)
+    if uploaded_image or uploaded_doc:
+        # Process the input
+        image_file = uploaded_image if uploaded_image else None
+        document_file = uploaded_doc if uploaded_doc else None
+        document_type = uploaded_doc.type.split('/')[-1] if uploaded_doc else None
+        
+        # If files uploaded but no prompt, suggest asking a question
+        if not prompt:
+            st.info("📎 Files uploaded! Now ask a question about them in the chat below.")
+    
+    if prompt or (uploaded_image or uploaded_doc):
         # Process the input
         image_file = uploaded_image if uploaded_image else None
         document_file = uploaded_doc if uploaded_doc else None

@@ -42,20 +42,24 @@ class AIModel:
         else:
             self.model_type = "huggingface"  # Default to Hugging Face
     
-    def generate_content(self, prompt, system_prompt=None, max_tokens=2048, temperature=0.7):
+    def generate_content(self, prompt, system_prompt=None, max_tokens=2048, temperature=0.7, image_data=None):
         """Generate content using the configured AI provider."""
         if self.model_type == "huggingface":
-            return self._huggingface_generate(prompt, system_prompt, max_tokens, temperature)
+            return self._huggingface_generate(prompt, system_prompt, max_tokens, temperature, image_data)
         elif self.model_type == "ollama":
-            return self._ollama_generate(prompt, system_prompt, max_tokens, temperature)
+            return self._ollama_generate(prompt, system_prompt, max_tokens, temperature, image_data)
         else:
-            return self._google_generate(prompt, system_prompt)
+            return self._google_generate(prompt, system_prompt, image_data)
     
-    def _huggingface_generate(self, prompt, system_prompt, max_tokens, temperature):
+    def _huggingface_generate(self, prompt, system_prompt, max_tokens, temperature, image_data=None):
         """Generate using Hugging Face Inference API."""
         try:
             headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
             full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+            
+            # If image is provided, add note to prompt (Hugging Face text models don't support images directly)
+            if image_data:
+                full_prompt = f"[Note: User has provided an image with their question. Please respond as if you can see the image and describe what might be in it based on the question context.]\n\n{full_prompt}"
             
             payload = {
                 "inputs": full_prompt,
@@ -80,15 +84,20 @@ class AIModel:
                 return str(result)
             else:
                 # Fallback to Google if Hugging Face fails
-                return self._google_generate(prompt, system_prompt)
+                return self._google_generate(prompt, system_prompt, image_data)
         except Exception as e:
             print(f"Hugging Face error: {e}, falling back to Google")
-            return self._google_generate(prompt, system_prompt)
+            return self._google_generate(prompt, system_prompt, image_data)
     
-    def _ollama_generate(self, prompt, system_prompt, max_tokens, temperature):
+    def _ollama_generate(self, prompt, system_prompt, max_tokens, temperature, image_data=None):
         """Generate using local Ollama."""
         try:
             full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+            
+            # If image is provided, add note to prompt (Ollama text models don't support images directly)
+            if image_data:
+                full_prompt = f"[Note: User has provided an image with their question. Please respond as if you can see the image and describe what might be in it based on the question context.]\n\n{full_prompt}"
+            
             payload = {
                 "model": OLLAMA_MODEL,
                 "prompt": full_prompt,
@@ -109,13 +118,13 @@ class AIModel:
                 result = response.json()
                 return result.get("response", "")
             else:
-                return self._google_generate(prompt, system_prompt)
+                return self._google_generate(prompt, system_prompt, image_data)
         except Exception as e:
             print(f"Ollama error: {e}, falling back to Google")
-            return self._google_generate(prompt, system_prompt)
+            return self._google_generate(prompt, system_prompt, image_data)
     
-    def _google_generate(self, prompt, system_prompt):
-        """Generate using Google Gemini (fallback)."""
+    def _google_generate(self, prompt, system_prompt, image_data=None):
+        """Generate using Google Gemini (supports images)."""
         try:
             import google.generativeai as genai
             if not hasattr(self, 'model'):
@@ -123,7 +132,23 @@ class AIModel:
                 self.model = genai.GenerativeModel("gemini-1.5-flash")
             
             full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-            response = self.model.generate_content(full_prompt)
+            
+            # If image is provided, send it to Gemini (which supports vision)
+            if image_data:
+                import base64
+                import io
+                from PIL import Image
+                
+                # Decode base64 image
+                image_bytes = base64.b64decode(image_data)
+                image = Image.open(io.BytesIO(image_bytes))
+                
+                # Send both image and text to Gemini
+                response = self.model.generate_content([image, full_prompt])
+            else:
+                # Text only
+                response = self.model.generate_content(full_prompt)
+            
             return response.candidates[0].content.parts[0].text.strip()
         except Exception as e:
             print(f"Google Gemini error: {e}")

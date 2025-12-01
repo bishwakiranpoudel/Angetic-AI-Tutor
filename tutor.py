@@ -80,10 +80,21 @@ Student Progress Summary:
 Keep responses concise but comprehensive. If the student provides images or documents, reference them in your response."""
         
         # Build enhanced prompt
-        if image_data or document_text:
-            enhanced_input = self.multimodal_processor.analyze_with_context(
-                user_input, image_data, document_text
-            )
+        # For documents, include text in prompt
+        # For images, pass image_data separately to model (if supported)
+        if document_text:
+            # Include document text in the prompt
+            if len(document_text) > 2000:
+                # Summarize if too long
+                summary_prompt = f"Summarize the key points from this document:\n\n{document_text[:2000]}..."
+                try:
+                    summary = MODEL.generate_content(summary_prompt)
+                    if isinstance(summary, str):
+                        document_text = summary
+                except:
+                    document_text = document_text[:2000] + "..."
+            
+            enhanced_input = f"Document context:\n{document_text}\n\nUser question: {user_input}"
         else:
             enhanced_input = user_input
         
@@ -96,7 +107,8 @@ Student: {enhanced_input}
 AI Tutor:"""
         
         try:
-            response = MODEL.generate_content(prompt, system_prompt=system_prompt)
+            # Pass image_data to model if available (Google Gemini will use it)
+            response = MODEL.generate_content(prompt, system_prompt=system_prompt, image_data=image_data)
             
             if isinstance(response, str):
                 tutor_reply = response
